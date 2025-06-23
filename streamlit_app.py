@@ -6,6 +6,9 @@ from datetime import datetime, timedelta
 import time
 import json
 
+os.environ['TZ'] = 'Asia/Shanghai'
+time.tzset()  # 这一行在 Unix/Linux 系统上很重要
+
 # 页面配置
 st.set_page_config(
     page_title="📋 订单翻译工具",
