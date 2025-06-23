@@ -9,3 +9,5 @@ font = "sans serif"
 headless = true
 enableCORS = false
 enableXsrfProtection = false
+timezone = "Asia/Shanghai"
+
