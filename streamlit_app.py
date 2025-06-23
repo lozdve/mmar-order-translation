@@ -144,13 +144,17 @@ project_id = "your-project-id"
             "max_daily_orders": max_daily_orders
         }
     
-    def process_orders(self, cutoff_date: datetime, progress_container=None):
+    def process_orders(self, cutoff_date: datetime, progress_container=None, status_container=None):
         """处理订单"""
         try:
             # 获取配置
             settings = st.secrets.get("app_settings", {})
             source_sheet_name = settings.get("source_sheet", "支援审核订单详情")
             target_sheet_name = settings.get("target_sheet", "电核订单英文翻译")
+            
+            # 显示初始化状态
+            if status_container:
+                status_container.info("📋 正在读取表格数据...")
             
             # 获取数据
             worksheet = self.spreadsheet.worksheet(source_sheet_name)
@@ -162,6 +166,9 @@ project_id = "your-project-id"
             headers = data[0]
             
             # 查找列索引
+            if status_container:
+                status_container.info("🔍 正在识别表格列...")
+                
             column_map = {
                 'date': ['审核日期', '日期'],
                 'order_id': ['订单编号', '订单号'],
@@ -185,8 +192,13 @@ project_id = "your-project-id"
                     return {"success": False, "message": f"找不到列: {possible_names[0]}"}
             
             # 筛选数据
+            if status_container:
+                status_container.info("📅 正在筛选符合条件的订单...")
+                
             filtered_orders = []
-            for row in data[1:]:
+            total_rows = len(data) - 1  # 排除表头
+            
+            for i, row in enumerate(data[1:], 1):
                 try:
                     if len(row) <= max(indices.values()):
                         continue
@@ -211,6 +223,10 @@ project_id = "your-project-id"
             if not filtered_orders:
                 return {"success": False, "message": f"没有找到 {cutoff_date.strftime('%Y-%m-%d')} 及以后的订单"}
             
+            # 显示筛选结果
+            if status_container:
+                status_container.success(f"✅ 找到 {len(filtered_orders)} 个符合条件的订单（共扫描 {total_rows} 行数据）")
+            
             # 检查限制
             usage_info = self.get_usage_info()
             if len(filtered_orders) > usage_info["max_daily_orders"]:
@@ -220,6 +236,9 @@ project_id = "your-project-id"
                 }
             
             # 创建目标工作表
+            if status_container:
+                status_container.info("📝 正在准备输出表格...")
+                
             try:
                 target_ws = self.spreadsheet.worksheet(target_sheet_name)
                 target_ws.clear()
@@ -234,15 +253,25 @@ project_id = "your-project-id"
             headers_row = ['Review Date', 'Order ID', 'Review Details', 'UW Instructions', 'Processing Date']
             target_ws.update('A1:E1', [headers_row])
             
+            if status_container:
+                status_container.info("🚀 开始翻译处理...")
+            
             # 处理订单
             processed_data = []
             today = datetime.now().strftime('%Y-%m-%d')
+            total_orders = len(filtered_orders)
             
             for i, row in enumerate(filtered_orders):
+                current_order = i + 1
+                
                 # 更新进度
                 if progress_container:
-                    progress = (i + 1) / len(filtered_orders)
+                    progress = current_order / total_orders
                     progress_container.progress(progress)
+                
+                if status_container:
+                    order_id = row[indices['order_id']] if len(row) > indices['order_id'] else f"订单{current_order}"
+                    status_container.info(f"🔄 正在处理第 {current_order}/{total_orders} 个订单: {order_id}")
                 
                 try:
                     review_date = row[indices['date']]
@@ -252,13 +281,19 @@ project_id = "your-project-id"
                     review_advice = row[indices['review_advice']]
                     need_call = row[indices['need_call']] in ['是', 'YES', 'yes']
                     
-                    # 翻译处理
+                    # 翻译处理（添加子步骤提示）
+                    if status_container:
+                        status_container.info(f"🌐 正在翻译订单 {order_id} - 审核详情...")
                     translated_details = self.translate_text(review_details)
                     time.sleep(0.3)
                     
+                    if status_container:
+                        status_container.info(f"🌐 正在翻译订单 {order_id} - 电核内容...")
                     translated_call = self.translate_text(call_content)
                     time.sleep(0.3)
                     
+                    if status_container:
+                        status_container.info(f"🌐 正在翻译订单 {order_id} - 信审意见...")
                     translated_advice = self.translate_text(review_advice)
                     time.sleep(0.3)
                     
@@ -273,33 +308,57 @@ project_id = "your-project-id"
                     
                     self.usage_stats["orders_processed"] += 1
                     
+                    if status_container:
+                        status_container.success(f"✅ 订单 {order_id} 处理完成 ({current_order}/{total_orders})")
+                    
                 except Exception as e:
-                    st.warning(f"处理订单 {i+1} 时出错: {e}")
+                    if status_container:
+                        status_container.warning(f"⚠️ 订单 {current_order} 处理失败: {e}")
                     continue
             
             # 写入数据
+            if status_container:
+                status_container.info("💾 正在保存翻译结果...")
+                
             if processed_data:
                 # 分批写入
                 batch_size = 20
-                for i in range(0, len(processed_data), batch_size):
-                    batch = processed_data[i:i+batch_size]
-                    start_row = i + 2
+                total_batches = (len(processed_data) + batch_size - 1) // batch_size
+                
+                for batch_num in range(total_batches):
+                    start_idx = batch_num * batch_size
+                    end_idx = min((batch_num + 1) * batch_size, len(processed_data))
+                    batch = processed_data[start_idx:end_idx]
+                    
+                    start_row = start_idx + 2
                     end_row = start_row + len(batch) - 1
+                    
+                    if status_container:
+                        status_container.info(f"💾 保存批次 {batch_num + 1}/{total_batches} (行 {start_row}-{end_row})")
+                    
                     target_ws.update(f'A{start_row}:E{end_row}', batch)
                     time.sleep(1)
                 
                 # 格式化
+                if status_container:
+                    status_container.info("🎨 正在格式化表格...")
                 target_ws.format('A1:E1', {'textFormat': {'bold': True}})
                 target_ws.format('D:D', {'wrapStrategy': 'WRAP'})
+            
+            if status_container:
+                status_container.success(f"🎉 全部完成！成功处理 {len(processed_data)} 个订单")
             
             return {
                 "success": True,
                 "message": f"成功处理 {len(processed_data)} 个订单",
                 "count": len(processed_data),
+                "total_found": len(filtered_orders),
                 "usage": self.get_usage_info()
             }
             
         except Exception as e:
+            if status_container:
+                status_container.error(f"❌ 处理过程中发生错误: {str(e)}")
             return {"success": False, "message": f"处理失败: {str(e)}"}
 
 def main():
@@ -346,7 +405,7 @@ def main():
         selected_option = st.selectbox(
             "选择日期范围",
             list(date_options.keys()),
-            index=0  # 默认"从6月20日开始"
+            index=0  
         )
         
         cutoff_date = date_options[selected_option]
@@ -381,53 +440,133 @@ def main():
     if process_button:
         st.markdown("### 📊 处理进度")
         
-        # 创建进度显示
-        progress_bar = st.progress(0)
-        status_text = st.empty()
+        # 创建进度显示容器
+        progress_container = st.container()
+        status_container = st.container()
+        metrics_container = st.container()
+        
+        with progress_container:
+            progress_bar = st.progress(0)
+            
+        with status_container:
+            status_info = st.empty()
+            
+        with metrics_container:
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                current_orders_metric = st.empty()
+            with col2:
+                tokens_metric = st.empty()
+            with col3:
+                cost_metric = st.empty()
         
         # 开始处理
         cutoff_datetime = datetime.combine(cutoff_date, datetime.min.time())
         
-        with st.spinner("正在处理订单..."):
-            result = translator.process_orders(cutoff_datetime, progress_bar)
+        # 初始显示
+        current_orders_metric.metric("处理进度", "0/0")
+        tokens_metric.metric("Token消耗", "0")
+        cost_metric.metric("预估成本", "$0.000")
+        
+        def update_metrics():
+            """更新实时统计"""
+            current_usage = translator.get_usage_info()
+            tokens_metric.metric("Token消耗", f"{current_usage['tokens_used']:,}")
+            cost_metric.metric("预估成本", f"${current_usage['estimated_cost']:.3f}")
+        
+        # 处理订单
+        result = translator.process_orders(
+            cutoff_datetime, 
+            progress_bar, 
+            status_info
+        )
         
         # 显示结果
         if result["success"]:
-            st.balloons()
-            st.success(f"🎉 {result['message']}")
+            # 完成进度显示
+            progress_bar.progress(1.0)
+            status_info.success(f"🎉 全部完成！成功处理 {result['count']} 个订单")
             
-            # 显示统计
+            # 最终统计
             final_usage = result["usage"]
+            current_orders_metric.metric("✅ 处理完成", f"{result['count']}/{result.get('total_found', result['count'])}")
+            tokens_metric.metric("🔤 Token总消耗", f"{final_usage['tokens_used']:,}")
+            cost_metric.metric("💰 本次总成本", f"${final_usage['estimated_cost']:.3f}")
             
-            col1, col2, col3 = st.columns(3)
+            # 庆祝效果
+            st.balloons()
+            
+            # 结果展示
+            st.markdown("---")
+            
+            # 处理统计卡片
+            col1, col2, col3, col4 = st.columns(4)
             with col1:
-                st.metric("✅ 处理完成", f"{result['count']} 订单")
+                st.info(f"**📋 找到订单**\n{result.get('total_found', result['count'])} 个")
             with col2:
-                st.metric("🔤 Token使用", f"{final_usage['tokens_used']:,}")
+                st.success(f"**✅ 成功处理**\n{result['count']} 个")
             with col3:
-                st.metric("💰 本次成本", f"${final_usage['estimated_cost']:.3f}")
+                st.info(f"**🔤 Token消耗**\n{final_usage['tokens_used']:,}")
+            with col4:
+                st.info(f"**💰 处理成本**\n${final_usage['estimated_cost']:.3f}")
             
             # 结果链接
             sheet_url = st.secrets.get("app_settings", {}).get("sheet_url",
                 "https://docs.google.com/spreadsheets/d/1g_xoXrBy8MnG_76nrRAT9eNaMytE5YrCYBUK3q5AE04")
             
             st.markdown(f"""
-            ### 📋 查看结果
+            ### 📋 查看翻译结果
             
-            **✨ 翻译完成！** 结果已保存到工作表
+            **🎉 翻译处理完成！** 所有结果已保存到工作表中。
             
-            [🔗 点击查看结果]({sheet_url})
+            [🔗 点击查看完整结果表格]({sheet_url})
             
-            **包含内容：**
-            - Review Date（审核日期）
-            - Order ID（订单编号）
-            - Review Details（审核详情翻译）
-            - UW Instructions（标准格式指令）
-            - Processing Date（处理日期）
+            **📊 输出内容说明：**
+            - **Review Date** - 审核日期（原始数据）
+            - **Order ID** - 订单编号（原始数据）
+            - **Review Details** - 审核详情（英文翻译）
+            - **UW Instructions** - UW指令（根据电核需求智能格式化）
+            - **Processing Date** - 处理日期（今天）
+            
+            **💡 提示：** 可以直接复制表格内容到其他系统中使用
             """)
             
         else:
-            st.error(f"❌ {result['message']}")
+            # 处理失败
+            progress_bar.progress(0)
+            status_info.error(f"❌ 处理失败")
+            
+            st.error(f"**处理失败：** {result['message']}")
+            
+            # 故障排除建议
+            with st.expander("🔧 故障排除建议"):
+                st.markdown("""
+                **常见问题及解决方法：**
+                
+                1. **找不到订单数据**
+                   - 检查选择的日期范围是否正确
+                   - 确认表格中有对应日期的数据
+                   
+                2. **找不到必要的列**
+                   - 检查表格列名是否为：审核日期、订单编号、是否需要电核等
+                   - 确认表格结构没有变化
+                   
+                3. **API调用失败**
+                   - 检查OpenAI API密钥是否有效
+                   - 确认账户余额充足
+                   
+                4. **权限问题**
+                   - 确认Google Sheets已分享给服务账号
+                   - 检查服务账号是否有编辑权限
+                   
+                5. **超出限制**
+                   - 订单数量可能超过每日处理限制
+                   - 尝试缩小日期范围或联系管理员
+                """)
+                
+            # 重试按钮
+            if st.button("🔄 重试处理", type="secondary"):
+                st.rerun()
 
 # 侧边栏
 with st.sidebar:
