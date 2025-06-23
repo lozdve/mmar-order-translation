@@ -336,7 +336,7 @@ def main():
     st.markdown("---")
     
     # 大号处理按钮
-    if st.button("🚀 开始翻译处理", type="primary", use_container_width=True, height=60):
+    if st.button("🚀 开始翻译处理", type="primary", use_container_width=True):
         
         # 处理区域
         st.markdown("### 📊 处理进度")
