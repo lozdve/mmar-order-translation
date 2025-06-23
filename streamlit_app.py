@@ -461,7 +461,7 @@ def main():
     
     # 成功初始化
     st.success("✅ 系统已就绪")
-    st.markdown(datetime.now().astimezone())
+    st.markdown(f"当前时间: datetime.now()")
     # 主界面
     col1, col2 = st.columns([2, 1])
     
