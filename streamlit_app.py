@@ -1,22 +1,3 @@
-######
-import streamlit as st
-import gspread
-from google.oauth2.service_account import Credentials
-import openai
-from datetime import datetime
-import time
-import json
-import io
-
-# 必须在文件开头设置页面配置
-st.set_page_config(
-    page_title="订单翻译工具",
-    page_icon="📋",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
-
-# 主应用代码...
 import streamlit as st
 import gspread
 from google.oauth2.service_account import Credentials
@@ -98,23 +79,40 @@ class OrderTranslator:
             st.warning(f"翻译失败: {e}")
             return f"[Translation Failed] {text}"
     
-    def format_combined_content(self, call_content: str, review_advice: str) -> str:
+    def format_combined_content(self, call_content: str, review_advice: str, need_call: bool = True) -> str:
         """格式化合并的UW指令内容"""
         formatted_text = "═══ THE APPROVAL RESULT SHALL BE PROVIDED AFTER RISK INVESTIGATION.@UW ═══\n"
-        formatted_text += "═══ NEED TO CALL AND CONFIRM THE FOLLOWING QUESTIONS： ═══\n\n"
         
-        if call_content and call_content.strip():
-            formatted_text += call_content.strip() + "\n"
+        if need_call:
+            # 需要电核的格式（原格式）
+            formatted_text += "═══ NEED TO CALL AND CONFIRM THE FOLLOWING QUESTIONS： ═══\n\n"
+            
+            if call_content and call_content.strip():
+                formatted_text += call_content.strip() + "\n"
+            else:
+                formatted_text += "[No call required content]\n"
+            
+            formatted_text += "\n"
+            formatted_text += "═══ REVIEW ADVICE： ═══\n"
+            
+            if review_advice and review_advice.strip():
+                formatted_text += review_advice.strip()
+            else:
+                formatted_text += "[No review advice]"
         else:
-            formatted_text += "[No call required content]\n"
-        
-        formatted_text += "\n"
-        formatted_text += "═══ REVIEW ADVICE： ═══\n"
-        
-        if review_advice and review_advice.strip():
-            formatted_text += review_advice.strip()
-        else:
-            formatted_text += "[No review advice]"
+            # 不需要电核的格式（新格式）
+            if call_content and call_content.strip():
+                formatted_text += call_content.strip() + "\n"
+            else:
+                formatted_text += "[No content]\n"
+            
+            formatted_text += "\n"
+            formatted_text += "═══ REVIEW ADVICE： ═══\n"
+            
+            if review_advice and review_advice.strip():
+                formatted_text += review_advice.strip()
+            else:
+                formatted_text += "[No review advice]"
         
         return formatted_text
     
@@ -174,7 +172,7 @@ class OrderTranslator:
             if missing:
                 return {"success": False, "message": f"找不到必要的列: {missing}"}
             
-            # 筛选数据
+            # 筛选数据 - 现在处理所有订单，不再只筛选需要电核的
             filtered_orders = []
             for i, row in enumerate(data[1:], 1):
                 try:
@@ -186,18 +184,14 @@ class OrderTranslator:
                     if not review_date or review_date < cutoff_date:
                         continue
                     
-                    # 检查是否需要电核
-                    need_call = str(row[indices['need_call']]).strip()
-                    if need_call not in ['是', 'YES', 'yes', 'Y']:
-                        continue
-                    
+                    # 现在不筛选电核状态，所有符合日期的订单都处理
                     filtered_orders.append(row)
                     
                 except Exception:
                     continue
             
             if not filtered_orders:
-                return {"success": False, "message": "没有找到符合条件的订单"}
+                return {"success": False, "message": "没有找到符合日期条件的订单"}
             
             # 创建目标工作表
             try:
@@ -236,6 +230,10 @@ class OrderTranslator:
                     call_content = row[indices['call_content']] if indices['call_content'] != -1 else ''
                     review_advice = row[indices['review_advice']] if indices['review_advice'] != -1 else ''
                     
+                    # 判断是否需要电核
+                    need_call_value = str(row[indices['need_call']]).strip()
+                    need_call = need_call_value in ['是', 'YES', 'yes', 'Y']
+                    
                     # 翻译
                     translated_details = self.translate_text(review_details)
                     time.sleep(0.5)
@@ -246,8 +244,12 @@ class OrderTranslator:
                     translated_advice = self.translate_text(review_advice)
                     time.sleep(0.5)
                     
-                    # 格式化合并内容
-                    uw_instructions = self.format_combined_content(translated_call, translated_advice)
+                    # 根据是否需要电核使用不同格式
+                    uw_instructions = self.format_combined_content(
+                        translated_call, 
+                        translated_advice, 
+                        need_call  # 传入是否需要电核的标志
+                    )
                     
                     processed_data.append([
                         review_date,
@@ -325,7 +327,7 @@ def main():
         cutoff_date = st.date_input(
             "📅 筛选起始日期",
             value=datetime(2025, 6, 20),
-            help="只处理此日期及以后的订单"
+            help="处理此日期及以后的所有订单（包括需要和不需要电核的）"
         )
         
         target_sheet_name = st.text_input(
@@ -356,21 +358,30 @@ def main():
             3. **配置权限**
                - 将Google Sheets分享给服务账号邮箱
                - 设置为"编辑者"权限
+               
+            4. **开始使用**
+               - 选择日期范围，处理所有订单
+               - 系统自动根据电核需求使用不同格式
             """)
         
         with col2:
             st.markdown("""
             #### ✨ 功能特点
-            - 🔍 **智能筛选**：自动筛选需要电核的订单
+            - 🔍 **智能筛选**：按日期筛选所有订单
             - 🌐 **AI翻译**：使用GPT进行专业翻译
-            - 📋 **标准格式**：生成统一的UW指令格式
+            - 📋 **智能格式**：根据电核需求使用不同格式
             - 📊 **实时进度**：显示处理进度和状态
             - 🔄 **自动保存**：结果直接保存到新工作表
             """)
         
         # 示例展示
         st.markdown("#### 📋 输出格式预览")
-        st.code("""
+        
+        tab1, tab2 = st.tabs(["需要电核的订单", "不需要电核的订单"])
+        
+        with tab1:
+            st.markdown("**需要电核订单的UW Instructions格式：**")
+            st.code("""
 ═══ THE APPROVAL RESULT SHALL BE PROVIDED AFTER RISK INVESTIGATION.@UW ═══
 ═══ NEED TO CALL AND CONFIRM THE FOLLOWING QUESTIONS： ═══
 
@@ -378,7 +389,17 @@ Customer identity verification required by phone call
 
 ═══ REVIEW ADVICE： ═══
 Recommend approval with additional guarantee required
-        """, language="text")
+            """, language="text")
+        
+        with tab2:
+            st.markdown("**不需要电核订单的UW Instructions格式：**")
+            st.code("""
+═══ THE APPROVAL RESULT SHALL BE PROVIDED AFTER RISK INVESTIGATION.@UW ═══
+QA review has been completed and final approval is granted
+
+═══ REVIEW ADVICE： ═══
+Customer qualifications are good, direct approval
+            """, language="text")
         
         return
     
@@ -474,8 +495,12 @@ Recommend approval with additional guarantee required
             - Review Date（审核日期）
             - Order ID（订单编号）
             - Review Details（审核详情 - 英文翻译）
-            - UW Instructions（UW指令 - 标准格式）
+            - UW Instructions（UW指令 - 根据电核需求自动选择格式）
             - Processing Date（处理日期）
+            
+            **格式说明**:
+            - 需要电核的订单：包含"NEED TO CALL AND CONFIRM"部分
+            - 不需要电核的订单：直接显示内容和建议
             """)
             
         else:
