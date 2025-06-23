@@ -475,7 +475,7 @@ def main():
         selected_option = st.selectbox(
             "选择日期范围",
             list(date_options.keys()),
-            index=0
+            index=4  # 默认"从6月20日开始"
         )
         
         cutoff_date = date_options[selected_option]
