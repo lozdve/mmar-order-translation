@@ -250,7 +250,7 @@ project_id = "your-project-id"
             except gspread.WorksheetNotFound:
                 target_ws = self.spreadsheet.add_worksheet(
                     title=target_sheet_name, 
-                    rows=len(filtered_orders) + 10, 
+                    rows=len(filtered_orders) + 50, 
                     cols=5
                 )
             
